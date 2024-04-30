@@ -40,6 +40,9 @@ void make_log(std::string str, bool print_sw);
 
 int main()
 {
+    uni_log.open(PATH_UNILOG, std::ios::out);    // 日志
+    make_log("[INFO] 当前进程号：" + std::to_string(getpid()) + '\n', true);
+    
     int key = 0;
     int fps = 0;
 
@@ -50,12 +53,11 @@ int main()
 
     cv::Mat captureFrame;
     cv::VideoCapture cap(0);
+    cap.set(3, 640);
+    cap.set(4, 480);
 
     std::vector<uchar> compress_buff;
 
-    uni_log.open(PATH_UNILOG, std::ios::out);    // 日志
-
-    make_log("[INFO] 当前进程号：" + std::to_string(getpid()) + '\n', true);
 
     // 创建 socket
     int serverfd = socket(AF_INET, SOCK_STREAM, 0);    // 流模式，TCP
@@ -121,7 +123,7 @@ int main()
 		if (clientfd != -1) 
         {
             memset(recvBuf, 0, sizeof(recvBuf));
-
+        
 			// // 接收数据
 			// if (recv(clientfd, recvBuf, SIZE_RECVBUF, 0) > 0) 
             // {
@@ -138,9 +140,9 @@ int main()
             // {
 			// 	make_log("[ERROR] 接收错误\n", true);
 			// }
-
+        
             send(clientfd, &send_package, sizeof(send_package), 0);    // 发送一帧数据包
-
+        
             close(clientfd);    // 清除链接
 		}
 
@@ -155,7 +157,7 @@ int main()
 
     close(serverfd);
 
-    // cv::destroyAllWindows();
+    cv::destroyAllWindows();
     uni_log.close();
     return 0;
 }
