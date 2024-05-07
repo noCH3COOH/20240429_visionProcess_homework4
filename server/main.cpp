@@ -1,170 +1,157 @@
 // ==================== includes ====================
 
-#include <time.h>
+#include <vector>
+#include <thread>
 #include <cstring>
 #include <fstream>
 #include <iostream>
 #include <unistd.h>
 #include <arpa/inet.h>
-#include <sys/types.h>
 #include <sys/socket.h>
+#include <netinet/in.h>
 #include <opencv2/opencv.hpp>
-
-// ==================== defines ====================
-
-#define WINDOW_NAME "【摄像头捕获画面】"
-
-#define SIZE_RECVBUF 1024
-
-#define PATH_UNILOG "log.md"
 
 // ==================== struct ====================
 
-struct SEND_PACKAGE_t
-{
-    int size;
-    int width;
-    int height;
-    std::vector<uchar> data;
-};
 
 // ==================== global variables ====================
 
-std::ofstream uni_log;
+int server_fd;
+int client_fd;
+sockaddr_in server_addr;
+sockaddr_in client_addr;
+socklen_t client_addr_len;
 
-// ==================== functions ====================
+cv::Mat frame;
+std::vector<uchar> encode_data;
 
-void make_log(std::string str, bool print_sw);
+// ==================== functions declaration ====================
+
+bool socket_connect_tcp_server(void);
+bool socket_connect_udp_server(void);
+
+bool socket_disconnect(void);
 
 // ==================== main ====================
 
-int main()
-{
-    uni_log.open(PATH_UNILOG, std::ios::out);    // 日志
-    make_log("[INFO] 当前进程号：" + std::to_string(getpid()) + '\n', true);
-    
-    int key = 0;
-    int fps = 0;
+int main() {
+    std::cout << "[INFO] 进程PID：" << getpid() << std::endl;
 
-    time_t timer;
-    clock_t start_time;
-
-    std::string time_stamp;
-
-    cv::Mat captureFrame;
-    cv::VideoCapture cap(0);
-    cap.set(3, 640);
-    cap.set(4, 480);
-
-    std::vector<uchar> compress_buff;
-
-
-    // 创建 socket
-    int serverfd = socket(AF_INET, SOCK_STREAM, 0);    // 流模式，TCP
-    // int serverfd = socket(AF_INET, SOCK_DGRAM, 0);    // 数据报模式，UDP
-	if(-1 == serverfd) {
-		make_log("[ERROR] socket 创建失败，程序退出\n", true);
-		return -1;
-	}
-
-    // 绑定端口
-    struct sockaddr_in addr_server;
-    memset(&addr_server, 0, sizeof(addr_server));
-	addr_server.sin_family = AF_INET;
-	addr_server.sin_addr.s_addr = htonl(INADDR_ANY);    // 接收任何地址的数据
-	addr_server.sin_port = htons(3000);    // 3000 端口
-	if(-1 == bind(serverfd, (struct sockaddr *)&addr_server, sizeof(addr_server))) 
+    if(!socket_connect_tcp_server())
     {
-		make_log("[ERROR] 端口绑定错误，程序退出\n", true);
-		return -1;
-	}
-	
-	// 开始监听
-	if(-1 == listen(serverfd, 2)) 
-    {
-		make_log("[ERROR] socket 监听错误，程序退出\n", true);
-		return -1;
-	}
-
-    struct sockaddr_in addr_client;
-    socklen_t len_addr_client = sizeof(addr_client);
-    
-    char recvBuf[SIZE_RECVBUF];
-    // std::string sendBuf;
-    SEND_PACKAGE_t send_package;
-
-    while('q' != key && 'Q' != key)
-    {
-        // ==================== 循环开始 ====================
-
-        start_time = std::clock();
-        time(&timer);
-        time_stamp = std::ctime(&timer);
-        time_stamp += " fps:" + std::to_string(fps);
-
-        cap >> captureFrame;    // 获取摄像头捕获画面
-        cv::flip(captureFrame, captureFrame, 1);
-        time_stamp += " fps:" + std::to_string(captureFrame.size().width) + 'x' + std::to_string(captureFrame.size().height);
-
-        // 打印视频时间戳
-        cv::putText(captureFrame, time_stamp, cv::Point(20,15), cv::FONT_HERSHEY_COMPLEX_SMALL, 1.0, cv::Scalar(0, 0, 255));
-
-        // 压缩视频打包
-        cv::imencode(".jpg", captureFrame, compress_buff);
-        send_package.data = compress_buff;
-        send_package.width = captureFrame.size().width;
-        send_package.height = captureFrame.size().height;
-        send_package.size = sizeof(send_package);
-
-        // ==================== socket 相关 ====================
-
-        // 准备链接
-		int clientfd = accept(serverfd, (struct sockaddr *)&addr_client, &len_addr_client);
-		if (clientfd != -1) 
-        {
-            memset(recvBuf, 0, sizeof(recvBuf));
-        
-			// // 接收数据
-			// if (recv(clientfd, recvBuf, SIZE_RECVBUF, 0) > 0) 
-            // {
-			// 	make_log("[INFO] 收到数据：" + std::string(recvBuf) + '\n', false);
-            //
-            //     // 数据回传
-            //     sendBuf = "[INFO] " + std::string(recvBuf);
-			// 	if (send(clientfd, sendBuf.c_str(), sendBuf.length(), 0) != sendBuf.length()) 
-            //     {
-			// 		make_log("[ERROR] 回传错误\n", true);
-			// 	}
-			// } 
-            // else 
-            // {
-			// 	make_log("[ERROR] 接收错误\n", true);
-			// }
-        
-            send(clientfd, &send_package, sizeof(send_package), 0);    // 发送一帧数据包
-        
-            close(clientfd);    // 清除链接
-		}
-
-        // ==================== 循环结束 ====================
-
-        cv::imshow(WINDOW_NAME, captureFrame);    // 显示摄像头捕获内容
-        
-        key = cv::waitKey(1);    // 获取按键状态
-
-        fps = (1/(float)(clock() - start_time) * CLOCKS_PER_SEC);    // 计算帧率
+        std::cerr << "[ERROR] socket 创建失败" << std::endl;
+        return 1;
     }
 
-    close(serverfd);
+    // 5. 读取图片数据
+    frame = cv::imread("./src.png");
+    
+    cv::imencode(".png", frame, encode_data);
+    size_t length = encode_data.end() - encode_data.begin();
+    unsigned char* buffer = (unsigned char*)malloc(length * sizeof(unsigned char));
+    std::copy(encode_data.begin(), encode_data.end(), buffer);
 
-    cv::destroyAllWindows();
-    uni_log.close();
+    // 6. 发送图片数据到客户端
+    std::cout << "[INFO] 发送图片大小：" << length << " Byte" << std::endl;
+    std::cout << "[INFO] 发送大小数据：" << send(client_fd, (void*)&length, sizeof(length), 0) << " Byte" << std::endl; // 先发送图片大小
+
+    size_t send_length = 0;
+    unsigned char* now_inbuff = buffer;
+    while(length > 0)
+    {
+        // 发送数据块，每次最多32768字节
+        send_length = send(client_fd, now_inbuff, (length > 32768 ? 32768 : length), 0);
+        if (send_length == -1) 
+        {    // 发送失败，处理错误
+            int err = errno;    
+            std::cerr << "[ERROR] 发送数据失败：" << strerror(err) << std::endl;
+            // 这里可以添加错误处理代码，例如关闭连接或重试
+            break;
+        }
+        std::cout << "[INFO] 已发送数据：" << send_length << " Byte" << std::endl;
+        now_inbuff += send_length; // 直接使用send_length作为偏移量
+        length -= send_length;
+    }
+
+    std::this_thread::sleep_for(std::chrono::seconds(10));
+
+    frame = cv::imdecode(encode_data, cv::IMREAD_UNCHANGED);
+    cv::imwrite("发送图像.png", frame);
+
+    // 7. 关闭socket
+    free(buffer);
+    socket_disconnect();
+
     return 0;
 }
 
-void make_log(std::string str, bool print_sw)
+// ==================== functions ====================
+
+bool socket_connect_tcp_server(void)
 {
-    uni_log.write(str.c_str(), str.length());
-    if(print_sw)    std::cout << str.c_str();
+    // 创建socket
+    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd == -1) {
+        std::cerr << "创建socket失败" << std::endl;
+        return false;
+    }
+
+    // 绑定socket
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET; // 使用IPv4
+    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1"); // 服务器IP地址
+    server_addr.sin_port = htons(8080); // 服务器端口
+    if (bind(server_fd, (sockaddr*)&server_addr, sizeof(server_addr)) == -1) {
+        std::cerr << "绑定socket失败" << std::endl;
+        close(server_fd);
+        return false;
+    }
+
+    // 监听socket
+    if (listen(server_fd, 5) == -1) {
+        std::cerr << "监听socket失败" << std::endl;
+        close(server_fd);
+        return false;
+    }
+
+    // 接受客户端连接
+    client_addr_len = sizeof(client_addr);
+    client_fd = accept(server_fd, (sockaddr*)&client_addr, &client_addr_len);
+    if (client_fd == -1) {
+        std::cerr << "接受客户端连接失败" << std::endl;
+        close(server_fd);
+        return false;
+    }
+
+    return true;
 }
 
+bool socket_connect_udp_server(void) {
+    // 创建socket
+    server_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (server_fd == -1) {
+        std::cerr << "创建socket失败" << std::endl;
+        return false;
+    }
+
+    // 绑定socket
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET; // 使用IPv4
+    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1"); // 服务器IP地址
+    server_addr.sin_port = htons(8080); // 服务器端口
+    if (bind(server_fd, (sockaddr*)&server_addr, sizeof(server_addr)) == -1) {
+        std::cerr << "绑定socket失败" << std::endl;
+        close(server_fd);
+        return false;
+    }
+
+    return true;
+}
+
+bool socket_disconnect(void)
+{
+    close(client_fd);
+    close(server_fd);
+
+    return true;
+}
