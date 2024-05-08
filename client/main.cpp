@@ -10,7 +10,16 @@
 #include <netinet/in.h>
 #include <opencv2/opencv.hpp>
 
+// ==================== define ====================
+
+#define IP_SERVER "127.0.0.1"
+#define PORT_TCP 3000
+#define PORT_UDP 3001
+
 // ==================== global variables ====================
+
+bool flag_tcp = false;
+bool flag_udp = false;
 
 int client_fd;
 sockaddr_in server_addr;
@@ -18,32 +27,41 @@ sockaddr_in server_addr;
 // ==================== functions declaration ====================
 
 bool socket_connect_tcp_client(void);
+bool socket_connect_udp_client(void);
 
 bool socket_disconnect_client(void);
 
 // ==================== main ====================
 
-int main() 
-{
-    if(!socket_connect_tcp_client())
-    {
+int main() {
+    std::cout << "[INFO] 进程PID：" << getpid() << std::endl;
+
+    if(!socket_connect_tcp_client()) {
+    // if(!socket_connect_udp_client()) {
         std::cerr << "[ERROR] socket 创建失败" << std::endl;
         return 1;
     }
 
-    // 3. 接收图片大小
+    // 接收图片大小
     size_t length;
-    std::cout << "[INFO] 已接收数据：" << recv(client_fd, (void*)&length, sizeof(length), 0) << " Byte" << std::endl;
+    std::cout << "[SUCCESS] 已接收数据：" << recv(client_fd, (void*)&length, sizeof(length), 0) << " Byte" << std::endl;
     std::cout << "[INFO] 接收图片大小：" << length << " Byte" << std::endl;
 
-    // 4. 接收图片数据
+    unsigned char* buffer = (unsigned char*)malloc(4 * sizeof(unsigned char));
+    if(0 != length % 4) {
+        std::cout << "[SUCCESS] 已接收数据：" << recv(client_fd, buffer, (4 - (length % 4)), 0) << " Byte" << std::endl;
+    }
+
+    // 接收图片数据
     size_t length_runtime = length, recv_length = 0;
-    unsigned char* buffer = (unsigned char*)malloc(length_runtime * sizeof(unsigned char));
+    buffer = (unsigned char*)realloc(buffer, length_runtime * sizeof(unsigned char));
     unsigned char* recv_buffer = (unsigned char*)malloc(size_t(32768));
     
-    while(length_runtime > 0)
-    {
-        recv_length = recv(client_fd, recv_buffer, 32768, 0);
+    while(length_runtime > 0) {
+        recv_length = recv(
+            client_fd, recv_buffer, 
+            (length_runtime < 32768 ? length_runtime : 32768)
+            , 0);
         if (recv_length == -1) {
             // 接收失败，检查errno
             int err = errno;
@@ -51,7 +69,7 @@ int main()
             // 处理错误，例如关闭连接或重试
             break;
         }
-        std::cout << "[INFO] 已接收数据：" << recv_length << " Byte" << std::endl;
+        std::cout << "[SUCCESS] 已接收数据：" << recv_length << " Byte" << std::endl;
         // 将接收到的数据复制到buffer中
         memcpy(buffer + (length - length_runtime), recv_buffer, recv_length);
         length_runtime -= recv_length;
@@ -61,43 +79,41 @@ int main()
     free(recv_buffer);
     
     // 确保接收到的数据长度与预期相符
-    if (length_runtime != 0) 
-    {
+    if(length_runtime != 0) {
         std::cerr << "[ERROR] 接收到的数据长度不正确。" << std::endl;
         // 处理错误，例如关闭连接或重试
+    } else {
+        std::vector<uchar> encode_data(buffer, buffer + length);
+        
+        // 保存图片数据到文件
+        cv::Mat frame = cv::imdecode(encode_data, cv::IMREAD_UNCHANGED);
+        if(frame.empty())    std::cerr << "[ERROR] 图像解码失败" << std::endl;
+        else    cv::imwrite("接收图片.png", frame);
     }
-    
-    std::vector<uchar> encode_data(buffer, buffer + length);
-
-    // 5. 保存图片数据到文件
-    cv::Mat frame = cv::imdecode(encode_data, cv::IMREAD_UNCHANGED);
-    if(frame.empty())    std::cerr << "[ERROR] 图像解码失败" << std::endl;
-    else    cv::imwrite("接收图片.png", frame);
 
     socket_disconnect_client();
 
-    std::cout << "图片接收完成" << std::endl;
+    std::cout << "[SUCCESS] 图片接收完成" << std::endl;
     return 0;
 }
 
 // ==================== functions ====================
 
-bool socket_connect_tcp_client(void)
-{
+bool socket_connect_tcp_client(void) {
     // 创建socket
     client_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (client_fd == -1) {
-        std::cerr << "创建socket失败" << std::endl;
+        std::cerr << "[ERROR] 创建socket失败" << std::endl;
         return false;
     }
 
     // 连接服务器
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET; // 使用IPv4
-    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1"); // 服务器IP地址
-    server_addr.sin_port = htons(8080); // 服务器端口
+    server_addr.sin_addr.s_addr = inet_addr(IP_SERVER); // 服务器IP地址
+    server_addr.sin_port = htons(PORT_TCP); // 服务器端口
     if (connect(client_fd, (sockaddr*)&server_addr, sizeof(server_addr)) == -1) {
-        std::cerr << "连接服务器失败" << std::endl;
+        std::cerr << "[ERROR] 连接服务器失败" << std::endl;
         close(client_fd);
         return false;
     }
@@ -105,8 +121,32 @@ bool socket_connect_tcp_client(void)
     return true;
 }
 
-bool socket_disconnect_client(void)
-{
+bool socket_connect_udp_client(void) {
+    // 创建socket
+    client_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (client_fd == -1) {
+        std::cerr << "[ERROR] 创建socket失败" << std::endl;
+        return false;
+    }
+
+    // 设置服务器地址信息
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET; // 使用IPv4
+    server_addr.sin_addr.s_addr = inet_addr(IP_SERVER); // 服务器IP地址
+    server_addr.sin_port = htons(PORT_UDP); // 服务器端口
+
+    // UDP客户端可以选择性地使用connect，这样可以简化后续的send和recv调用
+    // 如果不调用connect，则需要在使用sendto和recvfrom时每次都指定目的地址
+    if (connect(client_fd, (sockaddr*)&server_addr, sizeof(server_addr)) == -1) {
+        std::cerr << "[ERROR] 连接到服务器失败" << std::endl;
+        close(client_fd);
+        return false;
+    }
+
+    return true;
+}
+
+bool socket_disconnect_client(void) {
     // 关闭socket
     close(client_fd);
     return true;
