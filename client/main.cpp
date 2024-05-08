@@ -29,6 +29,8 @@ sockaddr_in server_addr;
 bool socket_connect_tcp_client(void);
 bool socket_connect_udp_client(void);
 
+size_t socket_recv_client(void* buffer, size_t length);
+
 bool socket_disconnect_client(void);
 
 // ==================== main ====================
@@ -44,24 +46,24 @@ int main() {
 
     // 接收图片大小
     size_t length;
-    std::cout << "[SUCCESS] 已接收数据：" << recv(client_fd, (void*)&length, sizeof(length), 0) << " Byte" << std::endl;
+    std::cout << "[SUCCESS] 已接收数据：" << socket_recv_client(&length, sizeof(length)) << " Byte" << std::endl;
     std::cout << "[INFO] 接收图片大小：" << length << " Byte" << std::endl;
 
+    // 先接收需要丢弃的数据
     unsigned char* buffer = (unsigned char*)malloc(4 * sizeof(unsigned char));
     if(0 != length % 4) {
-        std::cout << "[SUCCESS] 已接收数据：" << recv(client_fd, buffer, (4 - (length % 4)), 0) << " Byte" << std::endl;
+        std::cout << "[SUCCESS] 已接收数据：" << socket_recv_client(buffer, (4 - (length % 4))) << " Byte" << std::endl;
     }
 
     // 接收图片数据
     size_t length_runtime = length, recv_length = 0;
     buffer = (unsigned char*)realloc(buffer, length_runtime * sizeof(unsigned char));
-    unsigned char* recv_buffer = (unsigned char*)malloc(size_t(32768));
+    unsigned char* recv_buffer = buffer;
     
     while(length_runtime > 0) {
-        recv_length = recv(
-            client_fd, recv_buffer, 
-            (length_runtime < 32768 ? length_runtime : 32768)
-            , 0);
+        recv_length = socket_recv_client(recv_buffer, 
+            (length_runtime < 32768 ? length_runtime : 32768));
+        
         if (recv_length == -1) {
             // 接收失败，检查errno
             int err = errno;
@@ -70,13 +72,10 @@ int main() {
             break;
         }
         std::cout << "[SUCCESS] 已接收数据：" << recv_length << " Byte" << std::endl;
-        // 将接收到的数据复制到buffer中
-        memcpy(buffer + (length - length_runtime), recv_buffer, recv_length);
+        
         length_runtime -= recv_length;
+        recv_buffer += recv_length;
     }
-    
-    // 释放内存
-    free(recv_buffer);
     
     // 确保接收到的数据长度与预期相符
     if(length_runtime != 0) {
@@ -118,6 +117,8 @@ bool socket_connect_tcp_client(void) {
         return false;
     }
 
+    flag_tcp = true;
+
     return true;
 }
 
@@ -143,11 +144,28 @@ bool socket_connect_udp_client(void) {
         return false;
     }
 
+    flag_udp = true;
+
     return true;
+}
+
+size_t socket_recv_client(void* buffer, size_t length) {
+    if(flag_tcp) {
+        recv(client_fd, buffer, length, 0);
+    } else if(flag_udp) {
+
+    } else {
+        std::cerr << "[ERROR] 无连接不能接收" << std::endl;
+        return -1;
+    }
 }
 
 bool socket_disconnect_client(void) {
     // 关闭socket
     close(client_fd);
+
+    flag_tcp = false;
+    flag_udp = false;
+
     return true;
 }
