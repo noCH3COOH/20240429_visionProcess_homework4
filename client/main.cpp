@@ -1,6 +1,8 @@
 // ==================== includes ====================
 
 #include <vector>
+#include <thread>
+#include <fcntl.h>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -14,7 +16,7 @@
 
 #define IP_SERVER "127.0.0.1"
 #define PORT_TCP 3000
-#define PORT_UDP 3001
+#define PORT_UDP 3000
 
 // ==================== global variables ====================
 
@@ -23,13 +25,26 @@ bool flag_udp = false;
 
 int client_fd;
 sockaddr_in server_addr;
+socklen_t server_addr_len;
+
+unsigned char frame_flag[] = {
+    0xD0, 0xA0, 0xD0, 0xA0
+};
 
 // ==================== functions declaration ====================
 
 bool socket_connect_tcp_client(void);
 bool socket_connect_udp_client(void);
 
+bool socket_recvFrame_client(size_t length);
+
+size_t socket_send_client(void* data, size_t length);
+size_t socket_send_tcp_client(void* data, size_t length);
+size_t socket_send_udp_client(void* data, size_t length);
+
 size_t socket_recv_client(void* buffer, size_t length);
+size_t socket_recv_tcp_client(void* buffer, size_t length);
+size_t socket_recv_udp_client(void* buffer, size_t length);
 
 bool socket_disconnect_client(void);
 
@@ -38,16 +53,25 @@ bool socket_disconnect_client(void);
 int main() {
     std::cout << "[INFO] 进程PID：" << getpid() << std::endl;
 
-    if(!socket_connect_tcp_client()) {
-    // if(!socket_connect_udp_client()) {
+    // if(!socket_connect_tcp_client()) {
+    if(!socket_connect_udp_client()) {
         std::cerr << "[ERROR] socket 创建失败" << std::endl;
         return 1;
     }
 
     // 接收图片大小
-    size_t length;
-    std::cout << "[SUCCESS] 已接收数据：" << socket_recv_client(&length, sizeof(length)) << " Byte" << std::endl;
-    std::cout << "[INFO] 接收图片大小：" << length << " Byte" << std::endl;
+    size_t length = -1;
+    if(flag_tcp) {
+        std::cout << "[SUCCESS] 已接收数据：" << socket_recv_client(&length, sizeof(length)) << " Byte" << std::endl;
+        std::cout << "[INFO] 接收图片大小：" << length << " Byte" << std::endl;
+    } else if(flag_udp) {
+        do {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            socket_send_client(frame_flag, 4);
+        } while( -1 == socket_recv_client(&length, sizeof(length)) );
+        std::cout << "[SUCCESS] 建立一条 UDP 链接到 " << server_addr.sin_addr.s_addr;
+        std::cout << ":" << server_addr.sin_port << std::endl;
+    }
 
     // 先接收需要丢弃的数据
     unsigned char* buffer = (unsigned char*)malloc(4 * sizeof(unsigned char));
@@ -55,40 +79,7 @@ int main() {
         std::cout << "[SUCCESS] 已接收数据：" << socket_recv_client(buffer, (4 - (length % 4))) << " Byte" << std::endl;
     }
 
-    // 接收图片数据
-    size_t length_runtime = length, recv_length = 0;
-    buffer = (unsigned char*)realloc(buffer, length_runtime * sizeof(unsigned char));
-    unsigned char* recv_buffer = buffer;
-    
-    while(length_runtime > 0) {
-        recv_length = socket_recv_client(recv_buffer, 
-            (length_runtime < 32768 ? length_runtime : 32768));
-        
-        if (recv_length == -1) {
-            // 接收失败，检查errno
-            int err = errno;
-            std::cerr << "[ERROR] 接收数据失败：(" << err << ") " << strerror(err) << std::endl;
-            // 处理错误，例如关闭连接或重试
-            break;
-        }
-        std::cout << "[SUCCESS] 已接收数据：" << recv_length << " Byte" << std::endl;
-        
-        length_runtime -= recv_length;
-        recv_buffer += recv_length;
-    }
-    
-    // 确保接收到的数据长度与预期相符
-    if(length_runtime != 0) {
-        std::cerr << "[ERROR] 接收到的数据长度不正确。" << std::endl;
-        // 处理错误，例如关闭连接或重试
-    } else {
-        std::vector<uchar> encode_data(buffer, buffer + length);
-        
-        // 保存图片数据到文件
-        cv::Mat frame = cv::imdecode(encode_data, cv::IMREAD_UNCHANGED);
-        if(frame.empty())    std::cerr << "[ERROR] 图像解码失败" << std::endl;
-        else    cv::imwrite("接收图片.png", frame);
-    }
+    socket_recvFrame_client(length);
 
     socket_disconnect_client();
 
@@ -112,10 +103,11 @@ bool socket_connect_tcp_client(void) {
     server_addr.sin_addr.s_addr = inet_addr(IP_SERVER); // 服务器IP地址
     server_addr.sin_port = htons(PORT_TCP); // 服务器端口
     if (connect(client_fd, (sockaddr*)&server_addr, sizeof(server_addr)) == -1) {
-        std::cerr << "[ERROR] 连接服务器失败" << std::endl;
+        std::cerr << "[ERROR] 端口绑定失败" << std::endl;
         close(client_fd);
         return false;
     }
+    server_addr_len = sizeof(server_addr);
 
     flag_tcp = true;
 
@@ -124,7 +116,7 @@ bool socket_connect_tcp_client(void) {
 
 bool socket_connect_udp_client(void) {
     // 创建socket
-    client_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    client_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (client_fd == -1) {
         std::cerr << "[ERROR] 创建socket失败" << std::endl;
         return false;
@@ -135,29 +127,113 @@ bool socket_connect_udp_client(void) {
     server_addr.sin_family = AF_INET; // 使用IPv4
     server_addr.sin_addr.s_addr = inet_addr(IP_SERVER); // 服务器IP地址
     server_addr.sin_port = htons(PORT_UDP); // 服务器端口
+    
+    server_addr_len = sizeof(server_addr);
 
-    // UDP客户端可以选择性地使用connect，这样可以简化后续的send和recv调用
-    // 如果不调用connect，则需要在使用sendto和recvfrom时每次都指定目的地址
-    if (connect(client_fd, (sockaddr*)&server_addr, sizeof(server_addr)) == -1) {
-        std::cerr << "[ERROR] 连接到服务器失败" << std::endl;
-        close(client_fd);
+    // 设置非阻塞模式
+    int flag = fcntl(client_fd, F_GETFL, 0);
+    if (flag < 0) {
+        std::cerr << "fcntl F_GETFL fail" << std::endl;
+        return false;
+    }
+    if (fcntl(client_fd, F_SETFL, flag | O_NONBLOCK) < 0) {
+        std::cerr << "fcntl F_SETFL fail" << std::endl;
         return false;
     }
 
     flag_udp = true;
 
+    std::cout << "[SUCCESS] UDP 客户端创建成功" << std::endl;
+
     return true;
 }
 
+bool socket_recvFrame_client(size_t length) {
+    // 接收图片数据
+    size_t length_runtime = length, recv_length = 0;
+    unsigned char* buffer = (unsigned char*)malloc(length_runtime * sizeof(unsigned char));
+    unsigned char* recv_buffer = buffer;
+    
+    while(length_runtime > 0) {
+        recv_length = socket_recv_client(recv_buffer, 
+            (length_runtime < 32768 ? length_runtime : 32768));
+        
+        if (recv_length == -1) {
+            // 接收失败，检查errno
+            int err = errno;
+            std::cerr << "[ERROR] 接收数据失败：(" << err << ") " << strerror(err) << std::endl;
+            // 处理错误，例如关闭连接或重试
+            return false;
+        }
+        std::cout << "[SUCCESS] 已接收数据：" << recv_length << " Byte" << std::endl;
+        
+        length_runtime -= recv_length;
+        recv_buffer += recv_length;
+    }
+    
+    // 确保接收到的数据长度与预期相符
+    if(length_runtime != 0) {
+        std::cerr << "[ERROR] 接收到的数据长度不正确。" << std::endl;
+        // 处理错误，例如关闭连接或重试
+        return false;
+    } else {
+        std::vector<uchar> encode_data(buffer, buffer + length);
+        
+        // 保存图片数据到文件
+        cv::Mat frame = cv::imdecode(encode_data, cv::IMREAD_UNCHANGED);
+        if(frame.empty())    std::cerr << "[ERROR] 图像解码失败" << std::endl;
+        else    cv::imwrite("接收图片.png", frame);
+    }
+
+    return true;
+}
+
+size_t socket_send_client(void* data, size_t length) {
+    if(flag_tcp) {
+        return socket_send_tcp_client(data, length);
+    } else if(flag_udp) {
+        return socket_send_udp_client(data, length);
+    } else {
+        std::cerr << "[ERROR] 无连接不能发送" << std::endl;
+        return -1;
+    }
+    
+}
+
+size_t socket_send_tcp_client(void* data, size_t length) {
+    return send(client_fd, data, length, 0);
+}
+
+size_t socket_send_udp_client(void* data, size_t length) {
+    auto ret = sendto(client_fd, data, length, 0,
+        (sockaddr*)&server_addr, server_addr_len);
+    if(-1 != ret) {
+        std::cout << "[INFO] 发送消息到" << inet_ntoa(server_addr.sin_addr);
+        std::cout << "(" << ntohs(server_addr.sin_port) << ")的消息: ";
+        std::cout << ret << " Byte" << std::endl;
+    }
+    return ret;
+}
+
+
 size_t socket_recv_client(void* buffer, size_t length) {
     if(flag_tcp) {
-        recv(client_fd, buffer, length, 0);
+        return socket_recv_tcp_client(buffer, length);
     } else if(flag_udp) {
-
+        return socket_recv_udp_client(buffer, length);
     } else {
         std::cerr << "[ERROR] 无连接不能接收" << std::endl;
         return -1;
     }
+}
+
+size_t socket_recv_tcp_client(void* buffer, size_t length) {
+    return recv(client_fd, buffer, length, 0);
+}
+
+size_t socket_recv_udp_client(void* buffer, size_t length) {
+    return recvfrom(client_fd, buffer, length, 0,
+        (sockaddr*)&server_addr, &server_addr_len);
 }
 
 bool socket_disconnect_client(void) {
