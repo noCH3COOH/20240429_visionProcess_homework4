@@ -93,8 +93,8 @@ int main() {
     buffer = (unsigned char*)malloc(128 * sizeof(unsigned char));
     memset(buffer, 0, 128);  
 
-    if(!socket_connect_tcp_server()) {
-    // if(!socket_connect_udp_server()) {
+    // if(!socket_connect_tcp_server()) {
+    if(!socket_connect_udp_server()) {
         std::cerr << "[ERROR] socket 创建失败" << std::endl;
         return 1;
     }
@@ -262,25 +262,34 @@ bool socket_sendFrame_server(cv::Mat& frame) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
         // UDP 直接分包发送不可靠，故这里运用停等式ARQ进行分包发送
-        stopAndWait_ARQ_t<unsigned char> send_package;    // 停等式ARQ发包缓冲区
-        size_t max_len_send_package = 32768 - 2*sizeof(int) - sizeof(size_t);
+        stopAndWait_ARQ_t<unsigned char> send_package_para;    // 停等式ARQ发包缓冲区
+        unsigned char* send_package = (unsigned char*)malloc(32768);
+        size_t max_len_send_package_para = 32768 - 2*sizeof(int) - sizeof(size_t);
 
-        send_package.data = buffer;
-        send_package.SN = 0;
-        send_package.RN = 0;
+        send_package_para.data = buffer;
+        send_package_para.SN = 0;
+        send_package_para.RN = 0;
 
         unsigned char* recv_buff = (unsigned char*)malloc(20);
         size_t recv_len = -1;
         int recv_RN;
         short retry;
         bool recv_notOK;
+
         while(package_length > 0) {
             recv_notOK = false;
             retry = 0;
 
             // 发送数据块，每次最多 32768 - 2*sizeof(int) - sizeof(size_t) == 32752 字节
-            send_package.size = (package_length < max_len_send_package) ? package_length : max_len_send_package;
-            send_length = socket_send_server(send_package.data, send_package.size);
+            send_package_para.size = (package_length < max_len_send_package_para) ? package_length + 16 : 32768;
+            send_package_para.SN += 1;
+
+            *((int*)send_package) = send_package_para.SN;
+            *(int*)(send_package + 4) = send_package_para.RN;
+            *(size_t*)(send_package + 8) = send_package_para.size;
+            memcpy(send_package + 16, send_package_para.data, (package_length < max_len_send_package_para) ? package_length : 32768);
+
+            send_length = socket_send_server(send_package, send_package_para.size);
             if (send_length == -1) {    // 发送失败，处理错误
                 int err = errno;    
                 std::cerr << "[ERROR] 发送数据失败：" << strerror(err) << std::endl;
@@ -288,34 +297,33 @@ bool socket_sendFrame_server(cv::Mat& frame) {
                 // 这里可以添加错误处理代码，例如关闭连接或重试
                 return false;
             }
-            send_package.SN += 1;
-            std::cout << "[SUCCESS] 已发送数据(" << send_package.SN << ", " << send_package.RN << ")：" << send_length << " Byte\n";
+            std::cout << "[SUCCESS] 已发送数据(" << send_package_para.SN << ", " << send_package_para.RN << ")：" << send_length << " Byte\n";
 
             // 接收响应
             do {
                 recv_len = socket_recv_server(recv_buff, 20);
                 if(-1 != recv_len) {
                     recv_RN = *((int*)(recv_buff + 4));
-                    if(recv_RN == send_package.SN) {    // 应该服务端发SN是几，响应的RN就是几，服务端一直有 RN <= SN
-                        send_package.RN += 1;
+                    if(recv_RN == send_package_para.SN) {    // 应该服务端发SN是几，响应的RN就是几，服务端一直有 RN <= SN
+                        send_package_para.RN += 1;
                         break;
                     }
                 } else {
-                    std::cerr << "[ERROR] 接收客户端响应出错，重试" << retry << "次" << std::endl;
+                    std::cerr << "[ERROR] 接收客户端响应出错，重试" << retry + 1 << "次" << std::endl;
                     retry += 1;
-                    if(3 == retry) {
+                    if(40 == retry) {
                         std::cerr << "[ERROR] 重试全部失败，数据重传" << std::endl;
-                        send_package.SN -= 1;
+                        send_package_para.SN -= 1;
                         recv_notOK = true;
                         break;
                     }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 }
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
             } while(1);
 
             if(recv_notOK)    continue;
-            send_package.data += send_length; // 直接使用send_length作为偏移量
-            package_length -= send_length;
+            send_package_para.data += send_length - 16;    // 直接使用send_length作为偏移量
+            package_length -= send_length - 16;
             std::cout << "[SUCCESS] 响应接收成功，累计发送数据：" << length - package_length << " Byte\n";
         }
 

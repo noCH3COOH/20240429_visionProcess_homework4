@@ -74,8 +74,8 @@ bool socket_disconnect_client(void);
 int main() {
     std::cout << "[INFO] 进程PID：" << getpid() << std::endl;
 
-    if(!socket_connect_tcp_client()) {
-    // if(!socket_connect_udp_client()) {
+    // if(!socket_connect_tcp_client()) {
+    if(!socket_connect_udp_client()) {
         std::cerr << "[ERROR] socket 创建失败" << std::endl;
         return 1;
     }
@@ -186,13 +186,13 @@ bool socket_recvFrame_client(size_t length) {
     // 接收图片数据
     size_t length_runtime = length, recv_length = 0;
     unsigned char* buffer = (unsigned char*)malloc(length_runtime * sizeof(unsigned char));
+    unsigned char* recv_buffer = buffer;
 
     if(flag_tcp) {   
+        // 先接收需要丢弃的数据
         if(0 != length % 4) {
             std::cout << "[SUCCESS] 已接收数据：" << socket_recv_client(buffer, (4 - (length % 4))) << " Byte\n";
         }
-
-        unsigned char* recv_buffer = buffer;
 
         while(length_runtime > 0) {
             recv_length = socket_recv_client(recv_buffer, 
@@ -214,9 +214,11 @@ bool socket_recvFrame_client(size_t length) {
 
     } else if(flag_udp) {
         bool flag_uselessData = false;    // 所有数据为保证4位发送，前有小于4个字节的无用数据
+        short retry = 0;
 
         stopAndWait_ARQ_t<unsigned char> send_buff;
-        stopAndWait_ARQ_t<unsigned char> recv_buff;
+        stopAndWait_ARQ_t<unsigned char> recv_buff_para;
+        unsigned char* recv_buff = (unsigned char*)malloc(32768);
 
         memset(&send_buff, 0, sizeof(send_buff));
         
@@ -231,38 +233,54 @@ bool socket_recvFrame_client(size_t length) {
         *(send_buff.data + 2) = frame_flag[2];
         *(send_buff.data + 3) = frame_flag[3];
 
-        memset(&recv_buff, 0, sizeof(stopAndWait_ARQ_t<unsigned char>));
-        recv_buff.data = buffer;
+        memset(&recv_buff_para, 0, sizeof(stopAndWait_ARQ_t<unsigned char>));
+        memset(recv_buff, 0, 32768);
 
         while(length_runtime > 0) {
-            recv_length = socket_recv_client(recv_buff.data, 
-                (length_runtime < 32768 ? length_runtime : 32768));
+            recv_length = socket_recv_client(recv_buff, 
+                (length_runtime < 32768 ? length_runtime + 16 : 32768));
             if (recv_length == -1) {
-                // 接收失败，检查errno
-                int err = errno;
-                std::cerr << "[ERROR] 接收数据失败：(" << err << ") " << strerror(err) << std::endl;
-                // 处理错误，例如关闭连接或重试
-                return false;
+                retry += 1;
+                std::cerr << "[ERROR] 接收数据失败，重试" << retry << "次" << std::endl;
+                if(10 == retry) {
+                    // 接收失败，检查errno
+                    int err = errno;
+                    std::cerr << "[ERROR] 接收数据失败：(" << err << ") " << strerror(err) << std::endl;
+                    // 处理错误，例如关闭连接或重试
+                    return false;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
-
-            recv_buff.SN = *((int*)&recv_buff);
-            recv_buff.RN = *((int*)&recv_buff + 4);
-            recv_buff.size = *((size_t*)&recv_buff + 8);
 
             send_buff.RN += 1;
 
-            if(recv_buff.SN == send_buff.RN ) {
-                std::cout << "[SUCCESS] 已接收数据(" << recv_buff.SN << ", " << recv_buff.RN << ")：" << recv_buff.size << " Byte\n";
+            std::cout << "[INFO] 已接收数据(" << send_buff.SN << ", " << send_buff.RN << ")：" << recv_length << " Byte\n";
+
+            recv_buff_para.SN = *((int*)recv_buff);
+            recv_buff_para.RN = *(int*)(recv_buff + 4);
+            recv_buff_para.size = *(int*)(recv_buff + 8) - 16;
+            recv_buff_para.data = recv_buff + 16;
+
+            if(!flag_uselessData) {
+                recv_buff_para.size -= (4 - (length % 4));
+                recv_buff_para.data += (4 - (length % 4));
+                flag_uselessData = true;
+            }
+
+            if(recv_buff_para.SN == send_buff.RN ) {
+                std::cout << "[SUCCESS] 数据正确(" << recv_buff_para.SN << ", " << recv_buff_para.RN << ")：" << recv_buff_para.size << " Byte\n";
+                memcpy(recv_buffer, recv_buff_para.data, recv_buff_para.size);
+                recv_buff += recv_buff_para.size;
                 send_buff.SN += 1;
                 socket_send_client(&send_buff, 20);
             } else {
-                std::cerr << "[ERROR] 接收无效" << std::endl;
+                std::cerr << "[ERROR] 接收无效(" << recv_buff_para.SN << ", " << recv_buff_para.RN << ")" << std::endl;
                 send_buff.RN -= 1;
                 continue;
             }
             
-            length_runtime -= recv_buff.size;
-            recv_buff.data += recv_buff.size;
+            length_runtime -= recv_buff_para.size;
+            recv_buff_para.data += recv_buff_para.size;
             std::cout << "[SUCCESS] 累计接收数据：" << length - length_runtime << " Byte\n";
         }
 
