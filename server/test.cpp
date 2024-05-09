@@ -58,6 +58,9 @@ int main(){
         int sz = recvfrom(sockfd, buffer, 128, 0, (sockaddr*)&src, &src_len);
         if (sz > 0){
             buffer[sz] = 0;
+            std::cout << "[INFO] 收到来自" << inet_ntoa(src.sin_addr);
+            std::cout << "(" << ntohs(src.sin_port) << ")的消息: ";
+            std::cout << sz << " Byte" << std::endl;
             printf("Get Message %d: %s\n", counter++, buffer);
         }
         else{
