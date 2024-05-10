@@ -62,6 +62,8 @@ ssize_t socket_recv_udp_client(void*& buffer, size_t length);
 
 bool socket_disconnect_client(void);
 
+int writeHexToFile(unsigned char *data, size_t size, const char *filename);
+
 // ==================== main ====================
 
 int main() {
@@ -258,6 +260,7 @@ bool socket_recvFrame_client(size_t length) {
             recv_buff_para.data = recv_buff + 16;
 
             if(!flag_uselessData) {
+                std::cout << "[INFO] 无用位数：" << 4 - (length % 4) << std::endl;
                 recv_buff_para.size -= (4 - (length % 4));
                 recv_buff_para.data += (4 - (length % 4));
                 flag_uselessData = true;
@@ -281,6 +284,8 @@ bool socket_recvFrame_client(size_t length) {
             std::cout << "[SUCCESS] 累计接收数据：" << length - length_runtime << " Byte\n";
             retry = 0;
         }
+
+        writeHexToFile(buffer, length, "log");
 
     } else {
         std::cerr << "[ERROR] 无连接不能接收帧" << std::endl;
@@ -360,6 +365,25 @@ bool socket_disconnect_client(void) {
     flag_udp = false;
 
     return true;
+}
+
+int writeHexToFile(unsigned char *data, size_t size, const char *filename) {
+    // 打开文件
+    FILE *file = fopen(filename, "wb");
+    if (!file) {
+        perror("无法打开文件");
+        return -1;
+    }
+
+    // 写入十六进制数据
+    for (size_t i = 0; i < size; ++i) {
+        // 将每个字节转换为十六进制
+        fprintf(file, "%02x", data[i]);
+    }
+
+    // 关闭文件
+    fclose(file);
+    return 0;
 }
 
 // ==================== class ====================

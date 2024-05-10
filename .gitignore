@@ -1,6 +1,7 @@
-*/log*
+*/*log*
 */*.o
 */*.exe
 */core.*
 */*.mp4
-.vscode
+*/.vscode
+client/Hex_log copy.txt

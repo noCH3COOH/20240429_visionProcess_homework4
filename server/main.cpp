@@ -76,6 +76,8 @@ ssize_t socket_recv_udp_server(void* buffer, size_t length);
 
 bool socket_disconnect_server(void);
 
+int writeHexToFile(unsigned char *data, size_t size, const char *filename);
+
 template <typename T>
 bool stopAndWait_ARQ_init(stopAndWait_ARQ_t<T>*& tar);
 
@@ -217,6 +219,7 @@ bool socket_sendFrame_server(cv::Mat& frame) {
     if(0 != length % 4)    package_length = length + (4 - (length % 4));    // 凑够 4 整除
     buffer = (unsigned char*)realloc(buffer, package_length * sizeof(unsigned char));
     std::copy(encode_data.begin(), encode_data.end(), buffer + (4 - (length % 4)));
+    writeHexToFile(buffer, package_length, "log");
 
     // 发送图片数据到客户端
     ssize_t send_length = 0;
@@ -268,6 +271,7 @@ bool socket_sendFrame_server(cv::Mat& frame) {
         int recv_RN;
         short retry;
         bool recv_notOK;
+        bool send_debug = false;
 
         while(package_length > 0) {
             recv_notOK = false;
@@ -281,6 +285,11 @@ bool socket_sendFrame_server(cv::Mat& frame) {
             *(int*)(send_package + 4) = send_package_para.RN;
             *(size_t*)(send_package + 8) = send_package_para.size;
             memcpy(send_package + 16, send_package_para.data, (package_length < max_len_send_package_para) ? package_length : 32768);
+
+            if(!send_debug) {
+                writeHexToFile(send_package, 32768, "log2");
+                send_debug = false;
+            }
 
             send_length = socket_send_server(send_package, send_package_para.size);
             if (send_length == -1) {    // 发送失败，处理错误
@@ -315,8 +324,8 @@ bool socket_sendFrame_server(cv::Mat& frame) {
             } while(1);
 
             if(recv_notOK)    continue;
-            send_package_para.data += send_length - 16;    // 直接使用send_length作为偏移量
-            package_length -= send_length - 16;
+            send_package_para.data += (send_length - 16);    // 直接使用send_length作为偏移量
+            package_length -= (send_length - 16);
             std::cout << "[SUCCESS] 响应接收成功(" << retry << ")，累计发送数据：" << length - package_length << " Byte\n";
         }
 
@@ -397,6 +406,25 @@ bool socket_disconnect_server(void) {
     close(server_fd);
 
     return true;
+}
+
+int writeHexToFile(unsigned char *data, size_t size, const char *filename) {
+    // 打开文件
+    FILE *file = fopen(filename, "wb");
+    if (!file) {
+        perror("无法打开文件");
+        return -1;
+    }
+
+    // 写入十六进制数据
+    for (size_t i = 0; i < size; ++i) {
+        // 将每个字节转换为十六进制
+        fprintf(file, "%02x", data[i]);
+    }
+
+    // 关闭文件
+    fclose(file);
+    return 0;
 }
 
 // ==================== class ====================
