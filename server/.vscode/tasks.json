@@ -2,7 +2,7 @@
     "version": "2.0.0",
     "command": "g++",
     "args": [
-        "-g", "-std=c++11", "${file}", "-o", "${fileBasenameNoExtension}.o",
+        "-g", "-std=c++17", "${file}", "-o", "${fileBasenameNoExtension}.o",
         "-I", "/usr/local/include",
         "-I", "/usr/local/include/opencv4",
         "-I", "/usr/local/include/opencv4/opencv2",

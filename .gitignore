@@ -8,3 +8,5 @@ client/Hex_log copy.txt
 */test.cpp
 
 Hex_log.txt
+
+.vscode/
