@@ -15,8 +15,11 @@
 // ==================== define ====================
 
 #define IP_SERVER "127.0.0.1"
+
 #define PORT_RXD 12321
 #define PORT_TXD 12322
+
+#define SEND_PACKAGE_MAX_SIZE (size_t)(16384)
 
 // ==================== class ====================
 
@@ -192,7 +195,7 @@ bool socket_recvFrame_client(size_t length) {
 
         while(length_runtime > 0) {
             recv_length = socket_recv_client(recv_buffer, 
-                (length_runtime < 32768 ? length_runtime : 32768));
+                (length_runtime < SEND_PACKAGE_MAX_SIZE ? length_runtime : SEND_PACKAGE_MAX_SIZE));
             
             if (recv_length == -1) {
                 // 接收失败，检查errno
@@ -214,7 +217,7 @@ bool socket_recvFrame_client(size_t length) {
 
         stopAndWait_ARQ_t<unsigned char> send_buff;
         stopAndWait_ARQ_t<unsigned char> recv_buff_para;
-        unsigned char* recv_buff = (unsigned char*)malloc(32768);
+        unsigned char* recv_buff = (unsigned char*)malloc(SEND_PACKAGE_MAX_SIZE);
 
         memset(&send_buff, 0, sizeof(send_buff));
         
@@ -232,9 +235,9 @@ bool socket_recvFrame_client(size_t length) {
         memset(&recv_buff_para, 0, sizeof(stopAndWait_ARQ_t<unsigned char>));
 
         while(length_runtime > 0) {
-            memset(recv_buff, 0, 32768);
+            memset(recv_buff, 0, SEND_PACKAGE_MAX_SIZE);
             recv_length = socket_recv_client(recv_buff, 
-                (length_runtime < 32768 ? length_runtime + 16 : 32768));
+                (length_runtime < SEND_PACKAGE_MAX_SIZE ? length_runtime + 16 : SEND_PACKAGE_MAX_SIZE));
             if((~recv_length) == 0) {
                 retry += 1;
                 std::cerr << "[ERROR] 接收数据失败，重试" << retry << "次，";
@@ -266,7 +269,7 @@ bool socket_recvFrame_client(size_t length) {
                 flag_uselessData = true;
             }
 
-            if( recv_buff_para.SN == send_buff.RN && recv_buff_para.size <= (length_runtime < 32768 ? length_runtime : 32768) ) {
+            if( recv_buff_para.SN == send_buff.RN && recv_buff_para.size <= (length_runtime < SEND_PACKAGE_MAX_SIZE ? length_runtime : SEND_PACKAGE_MAX_SIZE) ) {
                 std::cout << "[SUCCESS] 数据正确(" << recv_buff_para.SN << ", " << recv_buff_para.RN << ")：" << recv_buff_para.size << " Byte\n";
                 memcpy(recv_buffer, recv_buff_para.data, recv_buff_para.size);
                 recv_buffer += recv_buff_para.size;
@@ -285,6 +288,10 @@ bool socket_recvFrame_client(size_t length) {
             retry = 0;
         }
 
+        if(buffer[1] != 0x50) {    // 不知道为什么前两位不对，打个补丁
+            buffer[0] = 0x89;
+            buffer[1] = 0x50;
+        }
         writeHexToFile(buffer, length, "log");
 
     } else {
@@ -377,8 +384,7 @@ int writeHexToFile(unsigned char *data, size_t size, const char *filename) {
 
     // 写入十六进制数据
     for (size_t i = 0; i < size; ++i) {
-        // 将每个字节转换为十六进制
-        fprintf(file, "%02x", data[i]);
+        fputc(data[i], file);
     }
 
     // 关闭文件

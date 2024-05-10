@@ -20,8 +20,11 @@
 // ==================== define ====================
 
 #define IP_SERVER "127.0.0.1"
+
 #define PORT_TXD 12321
 #define PORT_RXD 12322
+
+#define SEND_PACKAGE_MAX_SIZE (size_t)(16384)
 
 // ==================== class ====================
 
@@ -259,8 +262,8 @@ bool socket_sendFrame_server(cv::Mat& frame) {
 
         // UDP 直接分包发送不可靠，故这里运用停等式ARQ进行分包发送
         stopAndWait_ARQ_t<unsigned char> send_package_para;    // 停等式ARQ发包缓冲区
-        unsigned char* send_package = (unsigned char*)malloc(32768);
-        size_t max_len_send_package_para = 32768 - 2*sizeof(int) - sizeof(size_t);
+        unsigned char* send_package = (unsigned char*)malloc(SEND_PACKAGE_MAX_SIZE);
+        size_t max_len_send_package_para = SEND_PACKAGE_MAX_SIZE - 2*sizeof(int) - sizeof(size_t);
 
         send_package_para.data = buffer;
         send_package_para.SN = 0;
@@ -277,19 +280,14 @@ bool socket_sendFrame_server(cv::Mat& frame) {
             recv_notOK = false;
             retry = 0;
 
-            // 发送数据块，每次最多 32768 - 2*sizeof(int) - sizeof(size_t) == 32752 字节
-            send_package_para.size = (package_length < max_len_send_package_para) ? package_length + 16 : 32768;
+            // 发送数据块，每次最多 SEND_PACKAGE_MAX_SIZE - 2*sizeof(int) - sizeof(size_t) == 32752 字节
+            send_package_para.size = (package_length < max_len_send_package_para) ? package_length + 16 : SEND_PACKAGE_MAX_SIZE;
             send_package_para.SN += 1;
 
             *((int*)send_package) = send_package_para.SN;
             *(int*)(send_package + 4) = send_package_para.RN;
             *(size_t*)(send_package + 8) = send_package_para.size;
-            memcpy(send_package + 16, send_package_para.data, (package_length < max_len_send_package_para) ? package_length : 32768);
-
-            if(!send_debug) {
-                writeHexToFile(send_package, 32768, "log2");
-                send_debug = false;
-            }
+            memcpy(send_package + 16, send_package_para.data, (package_length < max_len_send_package_para) ? package_length : SEND_PACKAGE_MAX_SIZE);
 
             send_length = socket_send_server(send_package, send_package_para.size);
             if (send_length == -1) {    // 发送失败，处理错误
@@ -332,8 +330,8 @@ bool socket_sendFrame_server(cv::Mat& frame) {
     } else if(flag_tcp) {
         unsigned char* now_inbuff = buffer;
         while(package_length > 0) {
-            // 发送数据块，每次最多32768字节
-            send_length = socket_send_server(now_inbuff, (package_length < 32768 ? package_length : 32768));
+            // 发送数据块，每次最多SEND_PACKAGE_MAX_SIZE字节
+            send_length = socket_send_server(now_inbuff, (package_length < SEND_PACKAGE_MAX_SIZE ? package_length : SEND_PACKAGE_MAX_SIZE));
             if (send_length == -1) {    // 发送失败，处理错误
                 int err = errno;    
                 std::cerr << "[ERROR] 发送数据失败：" << strerror(err) << std::endl;
@@ -418,8 +416,7 @@ int writeHexToFile(unsigned char *data, size_t size, const char *filename) {
 
     // 写入十六进制数据
     for (size_t i = 0; i < size; ++i) {
-        // 将每个字节转换为十六进制
-        fprintf(file, "%02x", data[i]);
+        fputc(data[i], file);
     }
 
     // 关闭文件
