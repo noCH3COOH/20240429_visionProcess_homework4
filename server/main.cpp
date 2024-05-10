@@ -35,13 +35,6 @@ public:
 public:
     stopAndWait_ARQ_t();
     ~stopAndWait_ARQ_t();
-    
-    int get_SN();
-    int get_RN();
-    
-    size_t get_size();
-
-    T* get_data();
 };
 
 // ==================== global variables ====================
@@ -73,13 +66,13 @@ bool socket_connect_udp_server(void);
 
 bool socket_sendFrame_server(cv::Mat& frame);
 
-size_t socket_send_server(void* data, size_t length);
-size_t socket_send_tcp_server(void* data, size_t length);
-size_t socket_send_udp_server(void* data, size_t length);
+ssize_t socket_send_server(void* data, size_t length);
+ssize_t socket_send_tcp_server(void* data, size_t length);
+ssize_t socket_send_udp_server(void* data, size_t length);
 
-size_t socket_recv_server(void* buffer, size_t length);
-size_t socket_recv_tcp_server(void* buffer, size_t length);
-size_t socket_recv_udp_server(void* buffer, size_t length);
+ssize_t socket_recv_server(void* buffer, size_t length);
+ssize_t socket_recv_tcp_server(void* buffer, size_t length);
+ssize_t socket_recv_udp_server(void* buffer, size_t length);
 
 bool socket_disconnect_server(void);
 
@@ -101,7 +94,7 @@ int main() {
 
     // UDP 接收 client 端数据
     if(flag_udp) {
-        size_t ret;
+        ssize_t ret;
         do {
             memset(&remote_client_addr, 0, sizeof(remote_client_addr));
 
@@ -226,7 +219,7 @@ bool socket_sendFrame_server(cv::Mat& frame) {
     std::copy(encode_data.begin(), encode_data.end(), buffer + (4 - (length % 4)));
 
     // 发送图片数据到客户端
-    size_t send_length = 0;
+    ssize_t send_length = 0;
     
     std::cout << "[INFO] 发送图片大小：" << length << " Byte" << std::endl;
     send_length = socket_send_server(&length, sizeof(length));
@@ -241,7 +234,7 @@ bool socket_sendFrame_server(cv::Mat& frame) {
     }
 
     if(flag_udp) {
-        size_t ret;
+        ssize_t ret;
         do {
             std::cout << "[INFO] 等待 UDP 客户端响应" << std::endl;
             ret = recvfrom(server_fd, buffer, 4, 0, (sockaddr*)&remote_client_addr, &remote_client_addr_len);
@@ -271,7 +264,7 @@ bool socket_sendFrame_server(cv::Mat& frame) {
         send_package_para.RN = 0;
 
         unsigned char* recv_buff = (unsigned char*)malloc(20);
-        size_t recv_len = -1;
+        ssize_t recv_len = -1;
         int recv_RN;
         short retry;
         bool recv_notOK;
@@ -317,14 +310,14 @@ bool socket_sendFrame_server(cv::Mat& frame) {
                         recv_notOK = true;
                         break;
                     }
-                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 }
             } while(1);
 
             if(recv_notOK)    continue;
             send_package_para.data += send_length - 16;    // 直接使用send_length作为偏移量
             package_length -= send_length - 16;
-            std::cout << "[SUCCESS] 响应接收成功，累计发送数据：" << length - package_length << " Byte\n";
+            std::cout << "[SUCCESS] 响应接收成功(" << retry << ")，累计发送数据：" << length - package_length << " Byte\n";
         }
 
     } else if(flag_tcp) {
@@ -351,7 +344,7 @@ bool socket_sendFrame_server(cv::Mat& frame) {
     return true;
 }
 
-size_t socket_send_server(void* data, size_t length) {
+ssize_t socket_send_server(void* data, size_t length) {
     if(flag_tcp)    return socket_send_tcp_server(data, length);
     else if(flag_udp)    return socket_send_udp_server(data, length);
     else {
@@ -360,20 +353,20 @@ size_t socket_send_server(void* data, size_t length) {
     }
 }
 
-size_t socket_send_tcp_server(void* data, size_t length) {
+ssize_t socket_send_tcp_server(void* data, size_t length) {
     if(0 != length % 4) std::cout << "[WARNING] 发送数据非4位整倍" << std::endl;
     
     return send(client_fd, data, length, 0);
 }
 
-size_t socket_send_udp_server(void* data, size_t length) {
+ssize_t socket_send_udp_server(void* data, size_t length) {
     if(0 != length % 4) std::cout << "[WARNING] 发送数据非4位整倍" << std::endl;
     
     return sendto(server_fd, data, length, 0,
         (sockaddr*)&remote_client_addr, remote_client_addr_len);
 }
 
-size_t socket_recv_server(void* buffer, size_t length) {
+ssize_t socket_recv_server(void* buffer, size_t length) {
     if(flag_tcp)    return socket_recv_tcp_server(buffer, length);
     else if(flag_udp)    return socket_recv_udp_server(buffer, length);
     else {
@@ -382,20 +375,16 @@ size_t socket_recv_server(void* buffer, size_t length) {
     }
 }
 
-size_t socket_recv_tcp_server(void* buffer, size_t length) {
+ssize_t socket_recv_tcp_server(void* buffer, size_t length) {
     return recv(client_fd, buffer, length, 0);
 }
 
-size_t socket_recv_udp_server(void* buffer, size_t length) {
-    auto ret = recvfrom(client_fd, buffer, length, 0, 
+ssize_t socket_recv_udp_server(void* buffer, size_t length) {
+    auto ret = recvfrom(server_fd, buffer, length, 0, 
         (sockaddr*)&remote_client_addr, &remote_client_addr_len);
     if(-1 != ret) {
         std::cout << "[INFO] 收到来自" << inet_ntoa(remote_client_addr.sin_addr);
         std::cout << "(" << ntohs(remote_client_addr.sin_port) << ")的消息: ";
-        std::cout << ret << " Byte" << std::endl;
-    } else {
-        std::cout << "[INFO] 接收来自" << inet_ntoa(remote_client_addr.sin_addr);
-        std::cout << "(" << ntohs(remote_client_addr.sin_port) << ")的消息出现问题: ";
         std::cout << ret << " Byte" << std::endl;
     }
 
@@ -417,30 +406,8 @@ stopAndWait_ARQ_t<T>::stopAndWait_ARQ_t() {
     SN = 0; // 初始化序列号
     RN = 0; // 初始化确认号
 
-    // 计算data可以指向的数据大小
-    size_t alloc_size = 32768 - 2*sizeof(int) - sizeof(size_t);
-    
-    // 计算可以存储多少个T类型的数据
-    size_t num_elements = alloc_size / sizeof(T);
-    
-    // 分配内存
-    data = static_cast<T*>(malloc(num_elements * sizeof(T)));
-    
-    if (!data) {
-        // 分配失败处理
-        // 这里可以根据实际情况决定如何处理，比如抛出异常
-        throw std::bad_alloc();
-    }
-    
-    // 初始化分配的内存
-    memset(data, 0, num_elements * sizeof(T));
-    
-    // 设置大小
-    size = num_elements;
+    size = 0;
 }
 
 template <typename T>
-stopAndWait_ARQ_t<T>::~stopAndWait_ARQ_t() {
-    // 释放分配的内存
-    free(data);
-}
+stopAndWait_ARQ_t<T>::~stopAndWait_ARQ_t() {}

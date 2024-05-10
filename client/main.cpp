@@ -30,13 +30,6 @@ public:
 public:
     stopAndWait_ARQ_t();
     ~stopAndWait_ARQ_t();
-    
-    int get_SN();
-    int get_RN();
-    
-    size_t get_size();
-
-    T* get_data();
 };
 
 // ==================== global variables ====================
@@ -59,13 +52,13 @@ bool socket_connect_udp_client(void);
 
 bool socket_recvFrame_client(size_t length);
 
-size_t socket_send_client(void* data, size_t length);
-size_t socket_send_tcp_client(void* data, size_t length);
-size_t socket_send_udp_client(void* data, size_t length);
+ssize_t socket_send_client(void* data, size_t length);
+ssize_t socket_send_tcp_client(void* data, size_t length);
+ssize_t socket_send_udp_client(void* data, size_t length);
 
-size_t socket_recv_client(void* buffer, size_t length);
-size_t socket_recv_tcp_client(void* buffer, size_t length);
-size_t socket_recv_udp_client(void* buffer, size_t length);
+ssize_t socket_recv_client(void* buffer, size_t length);
+ssize_t socket_recv_tcp_client(void* buffer, size_t length);
+ssize_t socket_recv_udp_client(void*& buffer, size_t length);
 
 bool socket_disconnect_client(void);
 
@@ -81,11 +74,11 @@ int main() {
     }
 
     // 接收图片大小
-    size_t length = -1;
+    ssize_t length = -1;
     if(flag_tcp) {
         std::cout << "[SUCCESS] 已接收数据：" << socket_recv_client(&length, sizeof(length)) << " Byte" << std::endl;
     } else if(flag_udp) {
-        size_t ret;
+        ssize_t ret;
         do {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             socket_send_client(frame_flag, 4);
@@ -184,7 +177,8 @@ bool socket_connect_udp_client(void) {
 
 bool socket_recvFrame_client(size_t length) {
     // 接收图片数据
-    size_t length_runtime = length, recv_length = 0;
+    ssize_t length_runtime = length;
+    ssize_t recv_length = -1;
     unsigned char* buffer = (unsigned char*)malloc(length_runtime * sizeof(unsigned char));
     unsigned char* recv_buffer = buffer;
 
@@ -234,22 +228,24 @@ bool socket_recvFrame_client(size_t length) {
         *(send_buff.data + 3) = frame_flag[3];
 
         memset(&recv_buff_para, 0, sizeof(stopAndWait_ARQ_t<unsigned char>));
-        memset(recv_buff, 0, 32768);
 
         while(length_runtime > 0) {
+            memset(recv_buff, 0, 32768);
             recv_length = socket_recv_client(recv_buff, 
                 (length_runtime < 32768 ? length_runtime + 16 : 32768));
-            if (recv_length == -1) {
+            if((~recv_length) == 0) {
                 retry += 1;
-                std::cerr << "[ERROR] 接收数据失败，重试" << retry << "次" << std::endl;
-                if(10 == retry) {
+                std::cerr << "[ERROR] 接收数据失败，重试" << retry << "次，";
+                std::cout << "发送响应包(" << send_buff.SN << ", " << send_buff.RN << ")" << std::endl;
+                socket_send_client(&send_buff, 20);
+                if(20 == retry) {
                     // 接收失败，检查errno
                     int err = errno;
                     std::cerr << "[ERROR] 接收数据失败：(" << err << ") " << strerror(err) << std::endl;
                     // 处理错误，例如关闭连接或重试
                     return false;
                 }
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
 
             send_buff.RN += 1;
@@ -267,11 +263,12 @@ bool socket_recvFrame_client(size_t length) {
                 flag_uselessData = true;
             }
 
-            if(recv_buff_para.SN == send_buff.RN ) {
+            if( recv_buff_para.SN == send_buff.RN && recv_buff_para.size <= (length_runtime < 32768 ? length_runtime : 32768) ) {
                 std::cout << "[SUCCESS] 数据正确(" << recv_buff_para.SN << ", " << recv_buff_para.RN << ")：" << recv_buff_para.size << " Byte\n";
                 memcpy(recv_buffer, recv_buff_para.data, recv_buff_para.size);
-                recv_buff += recv_buff_para.size;
-                send_buff.SN += 1;
+                recv_buffer += recv_buff_para.size;
+                send_buff.SN += 1; 
+                std::cout << "[INFO] 发送响应包(" << send_buff.SN << ", " << send_buff.RN << ")" << std::endl;
                 socket_send_client(&send_buff, 20);
             } else {
                 std::cerr << "[ERROR] 接收无效(" << recv_buff_para.SN << ", " << recv_buff_para.RN << ")" << std::endl;
@@ -282,6 +279,7 @@ bool socket_recvFrame_client(size_t length) {
             length_runtime -= recv_buff_para.size;
             recv_buff_para.data += recv_buff_para.size;
             std::cout << "[SUCCESS] 累计接收数据：" << length - length_runtime << " Byte\n";
+            retry = 0;
         }
 
     } else {
@@ -290,7 +288,7 @@ bool socket_recvFrame_client(size_t length) {
     }
 
     // 确保接收到的数据长度与预期相符
-    if(length_runtime != 0) {
+    if(length_runtime != 0 || (recv_buffer - buffer != length)) {
         std::cerr << "[ERROR] 接收到的数据长度不正确。" << std::endl;
         // 处理错误，例如关闭连接或重试
         return false;
@@ -306,7 +304,7 @@ bool socket_recvFrame_client(size_t length) {
     return true;
 }
 
-size_t socket_send_client(void* data, size_t length) {
+ssize_t socket_send_client(void* data, size_t length) {
     if(flag_tcp) {
         return socket_send_tcp_client(data, length);
     } else if(flag_udp) {
@@ -318,11 +316,11 @@ size_t socket_send_client(void* data, size_t length) {
     
 }
 
-size_t socket_send_tcp_client(void* data, size_t length) {
+ssize_t socket_send_tcp_client(void* data, size_t length) {
     return send(client_fd, data, length, 0);
 }
 
-size_t socket_send_udp_client(void* data, size_t length) {
+ssize_t socket_send_udp_client(void* data, size_t length) {
     auto ret = sendto(client_fd, data, length, 0,
         (sockaddr*)&remote_server_addr, remote_server_addr_len);
     if(-1 != ret) {
@@ -334,7 +332,7 @@ size_t socket_send_udp_client(void* data, size_t length) {
 }
 
 
-size_t socket_recv_client(void* buffer, size_t length) {
+ssize_t socket_recv_client(void* buffer, size_t length) {
     if(flag_tcp) {
         return socket_recv_tcp_client(buffer, length);
     } else if(flag_udp) {
@@ -345,11 +343,11 @@ size_t socket_recv_client(void* buffer, size_t length) {
     }
 }
 
-size_t socket_recv_tcp_client(void* buffer, size_t length) {
+ssize_t socket_recv_tcp_client(void* buffer, size_t length) {
     return recv(client_fd, buffer, length, 0);
 }
 
-size_t socket_recv_udp_client(void* buffer, size_t length) {
+ssize_t socket_recv_udp_client(void*& buffer, size_t length) {
     return recvfrom(client_fd, buffer, length, 0,
         (sockaddr*)&remote_server_addr, &remote_server_addr_len);
 }
@@ -370,31 +368,8 @@ template <typename T>
 stopAndWait_ARQ_t<T>::stopAndWait_ARQ_t() {
     SN = 0; // 初始化序列号
     RN = 0; // 初始化确认号
-
-    // 计算data可以指向的数据大小
-    size_t alloc_size = 32768 - 2*sizeof(int) - sizeof(size_t);
-    
-    // 计算可以存储多少个T类型的数据
-    size_t num_elements = alloc_size / sizeof(T);
-    
-    // 分配内存
-    data = static_cast<T*>(malloc(num_elements * sizeof(T)));
-    
-    if (!data) {
-        // 分配失败处理
-        // 这里可以根据实际情况决定如何处理，比如抛出异常
-        throw std::bad_alloc();
-    }
-    
-    // 初始化分配的内存
-    memset(data, 0, num_elements * sizeof(T));
-    
-    // 设置大小
-    size = num_elements;
+    size = 0;
 }
 
 template <typename T>
-stopAndWait_ARQ_t<T>::~stopAndWait_ARQ_t() {
-    // 释放分配的内存
-    free(data);
-}
+stopAndWait_ARQ_t<T>::~stopAndWait_ARQ_t() {}
