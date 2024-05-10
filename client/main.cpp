@@ -20,6 +20,7 @@
 #define PORT_TXD 12322
 
 #define SEND_PACKAGE_MAX_SIZE (size_t)(16384)
+#define NAME_SHOW_WINDOW "【接收数据】"
 
 // ==================== class ====================
 
@@ -53,15 +54,15 @@ unsigned char frame_flag[] = {
 bool socket_connect_tcp_client(void);
 bool socket_connect_udp_client(void);
 
-bool socket_recvFrame_client(size_t length);
+bool socket_recvFrame_client();
 
-ssize_t socket_send_client(void* data, size_t length);
-ssize_t socket_send_tcp_client(void* data, size_t length);
-ssize_t socket_send_udp_client(void* data, size_t length);
+ssize_t socket_send_client(void* data, size_t len);
+ssize_t socket_send_tcp_client(void* data, size_t len);
+ssize_t socket_send_udp_client(void* data, size_t len);
 
-ssize_t socket_recv_client(void* buffer, size_t length);
-ssize_t socket_recv_tcp_client(void* buffer, size_t length);
-ssize_t socket_recv_udp_client(void*& buffer, size_t length);
+ssize_t socket_recv_client(void* buffer, size_t len);
+ssize_t socket_recv_tcp_client(void* buffer, size_t len);
+ssize_t socket_recv_udp_client(void*& buffer, size_t len);
 
 bool socket_disconnect_client(void);
 
@@ -71,48 +72,21 @@ int writeHexToFile(unsigned char *data, size_t size, const char *filename);
 
 int main() {
     std::cout << "[INFO] 进程PID：" << getpid() << std::endl;
+    cv::namedWindow(NAME_SHOW_WINDOW);    
 
-    // if(!socket_connect_tcp_client()) {
-    if(!socket_connect_udp_client()) {
-        std::cerr << "[ERROR] socket 创建失败" << std::endl;
+    if(!socket_connect_tcp_client()) {
+    // if(!socket_connect_udp_client()) {
+        // std::cerr << "[ERROR] socket 创建失败" << std::endl;
         return 1;
-    }
+    } 
 
-    // 接收图片大小
-    ssize_t length = -1;
-    if(flag_tcp) {
-        std::cout << "[SUCCESS] 已接收数据：" << socket_recv_client(&length, sizeof(length)) << " Byte" << std::endl;
-    } else if(flag_udp) {
-        ssize_t ret;
-        do {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            socket_send_client(frame_flag, 4);
-            ret = socket_recv_client(&length, sizeof(length));
-            std::cout << "[SUCCESS] 已接收数据：" << ret << " Byte" << std::endl;
-        } while( -1 == ret );
-        std::cout << "[SUCCESS] 建立一条 UDP 链接到 " << inet_ntoa(remote_server_addr.sin_addr);
-        std::cout << ":" << ntohs(remote_server_addr.sin_port) << std::endl;
-    }
-
-    std::cout << "[INFO] 接收图片大小：" << length << " Byte" << std::endl;
-
-    if(flag_udp) {
-        socket_send_client(frame_flag, 4);
-        std::cout << "[SUCCESS] 响应发送成功 " << inet_ntoa(remote_server_addr.sin_addr);
-        std::cout << ":" << ntohs(remote_server_addr.sin_port) << std::endl;
-    }
-
-    // // 先接收需要丢弃的数据
-    // unsigned char* buffer = (unsigned char*)malloc(4 * sizeof(unsigned char));
-    // if(0 != length % 4) {
-    //     std::cout << "[SUCCESS] 已接收数据：" << socket_recv_client(buffer, (4 - (length % 4))) << " Byte\n";
-    // }
-
-    socket_recvFrame_client(length);
+    socket_recvFrame_client();
 
     socket_disconnect_client();
 
-    std::cout << "[SUCCESS] 图片接收完成" << std::endl;
+    // std::cout << "[SUCCESS] 图片接收完成" << std::endl;
+    cv::destroyAllWindows();
+    cv::waitKey(0);
     return 0;
 }
 
@@ -122,7 +96,7 @@ bool socket_connect_tcp_client(void) {
     // 创建socket
     client_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (client_fd == -1) {
-        std::cerr << "[ERROR] 创建socket失败" << std::endl;
+        // std::cerr << "[ERROR] 创建socket失败" << std::endl;
         return false;
     }
 
@@ -132,7 +106,7 @@ bool socket_connect_tcp_client(void) {
     remote_server_addr.sin_addr.s_addr = inet_addr(IP_SERVER);    // 服务器IP地址
     remote_server_addr.sin_port = htons(PORT_TXD);    // 服务器端口
     if (connect(client_fd, (sockaddr*)&remote_server_addr, sizeof(remote_server_addr)) == -1) {
-        std::cerr << "[ERROR] 端口绑定失败" << std::endl;
+        // std::cerr << "[ERROR] 端口绑定失败" << std::endl;
         close(client_fd);
         return false;
     }
@@ -175,74 +149,108 @@ bool socket_connect_udp_client(void) {
 
     flag_udp = true;
 
-    std::cout << "[SUCCESS] UDP 客户端创建成功" << std::endl;
+    // std::cout << "[SUCCESS] UDP 客户端创建成功" << std::endl;
 
     return true;
 }
 
-bool socket_recvFrame_client(size_t length) {
+bool socket_recvFrame_client() {
     // 接收图片数据
-    ssize_t length_runtime = length;
-    ssize_t recv_length = -1;
-    unsigned char* buffer = (unsigned char*)malloc(length_runtime * sizeof(unsigned char));
-    unsigned char* recv_buffer = buffer;
+    ssize_t len;
+    ssize_t len_remain;
+    ssize_t recv_len = -1;
+    unsigned char* buffer;
+    unsigned char* p_toBuffer;
 
     if(flag_tcp) {   
-        // 先接收需要丢弃的数据
-        if(0 != length % 4) {
-            std::cout << "[SUCCESS] 已接收数据：" << socket_recv_client(buffer, (4 - (length % 4))) << " Byte\n";
+        auto ret = socket_recv_client(&len, sizeof(len));
+        // std::cout << "[SUCCESS] 已接收数据：" << ret << " Byte" << std::endl;
+        if(ret != -1) {
+            // std::cout << "[INFO] 接收图片大小：" << len << " Byte" << std::endl;
+        } else {
+            return false;
         }
 
-        while(length_runtime > 0) {
-            recv_length = socket_recv_client(recv_buffer, 
-                (length_runtime < SEND_PACKAGE_MAX_SIZE ? length_runtime : SEND_PACKAGE_MAX_SIZE));
+        len_remain = len;
+        buffer = (unsigned char*)malloc(len_remain * sizeof(unsigned char));
+        p_toBuffer = buffer;
+
+        // 先接收需要丢弃的数据
+        if(0 != len % 4) {
+            auto ret = socket_recv_client(buffer, (4 - (len % 4)));
+            // std::cout << "[SUCCESS] 已接收数据：" << ret << " Byte\n";
+        }
+
+        while(len_remain > 0) {
+            recv_len = socket_recv_client(p_toBuffer, 
+                (len_remain < SEND_PACKAGE_MAX_SIZE ? len_remain : SEND_PACKAGE_MAX_SIZE));
             
-            if (recv_length == -1) {
+            if (recv_len == -1) {
                 // 接收失败，检查errno
                 int err = errno;
                 std::cerr << "[ERROR] 接收数据失败：(" << err << ") " << strerror(err) << std::endl;
                 // 处理错误，例如关闭连接或重试
                 return false;
             }
-            length_runtime -= recv_length;
-            recv_buffer += recv_length;
+            len_remain -= recv_len;
+            p_toBuffer += recv_len;
             
-            std::cout << "[SUCCESS] 已接收数据：" << recv_length << " Byte，";
-            std::cout << "累计接收数据：" << length - length_runtime << " Byte\n";
+            // std::cout << "[SUCCESS] 已接收数据：" << recv_len << " Byte，";
+            // std::cout << "累计接收数据：" << len - len_remain << " Byte\n";
         }
 
     } else if(flag_udp) {
+        ssize_t ret;
+        do {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            socket_send_client(frame_flag, 4);
+            ret = socket_recv_client(&len, sizeof(len));
+            // std::cout << "[SUCCESS] 已接收数据：" << ret << " Byte" << std::endl;
+        } while( -1 == ret );
+        std::cout << "[INFO] 接收图片大小：" << len << " Byte" << std::endl;
+        std::cout << "[SUCCESS] 建立一条 UDP 链接到 " << inet_ntoa(remote_server_addr.sin_addr);
+        std::cout << ":" << ntohs(remote_server_addr.sin_port) << std::endl;
+
+        socket_send_client(frame_flag, 4);
+        // std::cout << "[SUCCESS] 响应发送成功 " << inet_ntoa(remote_server_addr.sin_addr);
+        // std::cout << ":" << ntohs(remote_server_addr.sin_port) << std::endl;
+
+        len_remain = len;
+        buffer = (unsigned char*)malloc(len_remain * sizeof(unsigned char));
+        p_toBuffer = buffer;
+    
+
         bool flag_uselessData = false;    // 所有数据为保证4位发送，前有小于4个字节的无用数据
         short retry = 0;
 
-        stopAndWait_ARQ_t<unsigned char> send_buff;
-        stopAndWait_ARQ_t<unsigned char> recv_buff_para;
-        unsigned char* recv_buff = (unsigned char*)malloc(SEND_PACKAGE_MAX_SIZE);
+        stopAndWait_ARQ_t<unsigned char> response_buff;
+        stopAndWait_ARQ_t<unsigned char> udp_recv_cache_para;
+        unsigned char* udp_recv_cache = (unsigned char*)malloc(SEND_PACKAGE_MAX_SIZE);
 
-        memset(&send_buff, 0, sizeof(send_buff));
+        memset(&response_buff, 0, sizeof(response_buff));
         
         // 构造响应包
-        send_buff.SN = 0;
-        send_buff.RN = 0;
-        send_buff.size = 20;
+        response_buff.SN = 0;
+        response_buff.RN = 0;
+        response_buff.size = 20;
         
-        send_buff.data = (unsigned char*)malloc(4);    // 只分配四个字节
-        *(send_buff.data) = frame_flag[0];
-        *(send_buff.data + 1) = frame_flag[1];
-        *(send_buff.data + 2) = frame_flag[2];
-        *(send_buff.data + 3) = frame_flag[3];
+        response_buff.data = (unsigned char*)malloc(4);    // 只分配四个字节
+        *(response_buff.data) = frame_flag[0];
+        *(response_buff.data + 1) = frame_flag[1];
+        *(response_buff.data + 2) = frame_flag[2];
+        *(response_buff.data + 3) = frame_flag[3];
 
-        memset(&recv_buff_para, 0, sizeof(stopAndWait_ARQ_t<unsigned char>));
+        memset(&udp_recv_cache_para, 0, sizeof(stopAndWait_ARQ_t<unsigned char>));
 
-        while(length_runtime > 0) {
-            memset(recv_buff, 0, SEND_PACKAGE_MAX_SIZE);
-            recv_length = socket_recv_client(recv_buff, 
-                (length_runtime < SEND_PACKAGE_MAX_SIZE ? length_runtime + 16 : SEND_PACKAGE_MAX_SIZE));
-            if((~recv_length) == 0) {
+        while(len_remain > 0) {
+            memset(udp_recv_cache, 0, SEND_PACKAGE_MAX_SIZE);
+            recv_len = socket_recv_client(udp_recv_cache, 
+                (len_remain < SEND_PACKAGE_MAX_SIZE ? len_remain + 16 : SEND_PACKAGE_MAX_SIZE));
+            if((~recv_len) == 0) {
                 retry += 1;
-                std::cerr << "[ERROR] 接收数据失败，重试" << retry << "次，";
-                std::cout << "发送响应包(" << send_buff.SN << ", " << send_buff.RN << ")" << std::endl;
-                socket_send_client(&send_buff, 20);
+                // std::cerr << "[ERROR] 接收数据失败，重试" << retry << "次，";
+                // std::cout << "发送响应包(" << response_buff.SN << ", " << response_buff.RN << ")" << std::endl;
+                socket_send_client(&response_buff, 20);
                 if(20 == retry) {
                     // 接收失败，检查errno
                     int err = errno;
@@ -253,114 +261,117 @@ bool socket_recvFrame_client(size_t length) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
 
-            send_buff.RN += 1;
+            response_buff.RN += 1;
 
-            std::cout << "[INFO] 已接收数据(" << send_buff.SN << ", " << send_buff.RN << ")：" << recv_length << " Byte\n";
+            // std::cout << "[INFO] 已接收数据(" << response_buff.SN << ", " << response_buff.RN << ")：" << recv_len << " Byte\n";
 
-            recv_buff_para.SN = *((int*)recv_buff);
-            recv_buff_para.RN = *(int*)(recv_buff + 4);
-            recv_buff_para.size = *(int*)(recv_buff + 8) - 16;
-            recv_buff_para.data = recv_buff + 16;
+            udp_recv_cache_para.SN = *((int*)udp_recv_cache);
+            udp_recv_cache_para.RN = *(int*)(udp_recv_cache + 4);
+            udp_recv_cache_para.size = *(int*)(udp_recv_cache + 8) - 16;
+            udp_recv_cache_para.data = udp_recv_cache + 16;
 
             if(!flag_uselessData) {
-                std::cout << "[INFO] 无用位数：" << 4 - (length % 4) << std::endl;
-                recv_buff_para.size -= (4 - (length % 4));
-                recv_buff_para.data += (4 - (length % 4));
+                // std::cout << "[INFO] 无用位数：" << 4 - (len % 4) << std::endl;
+                udp_recv_cache_para.size -= (4 - (len % 4));
+                udp_recv_cache_para.data += (4 - (len % 4));
                 flag_uselessData = true;
             }
 
-            if( recv_buff_para.SN == send_buff.RN && recv_buff_para.size <= (length_runtime < SEND_PACKAGE_MAX_SIZE ? length_runtime : SEND_PACKAGE_MAX_SIZE) ) {
-                std::cout << "[SUCCESS] 数据正确(" << recv_buff_para.SN << ", " << recv_buff_para.RN << ")：" << recv_buff_para.size << " Byte\n";
-                memcpy(recv_buffer, recv_buff_para.data, recv_buff_para.size);
-                recv_buffer += recv_buff_para.size;
-                send_buff.SN += 1; 
-                std::cout << "[INFO] 发送响应包(" << send_buff.SN << ", " << send_buff.RN << ")" << std::endl;
-                socket_send_client(&send_buff, 20);
+            if( udp_recv_cache_para.SN == response_buff.RN && udp_recv_cache_para.size <= (len_remain < SEND_PACKAGE_MAX_SIZE ? len_remain : SEND_PACKAGE_MAX_SIZE) ) {
+                // std::cout << "[SUCCESS] 数据正确(" << udp_recv_cache_para.SN << ", " << udp_recv_cache_para.RN << ")：" << udp_recv_cache_para.size << " Byte\n";
+                memcpy(p_toBuffer, udp_recv_cache_para.data, udp_recv_cache_para.size);
+                p_toBuffer += udp_recv_cache_para.size;
+                response_buff.SN += 1; 
+                // std::cout << "[INFO] 发送响应包(" << response_buff.SN << ", " << response_buff.RN << ")" << std::endl;
+                socket_send_client(&response_buff, 20);
             } else {
-                std::cerr << "[ERROR] 接收无效(" << recv_buff_para.SN << ", " << recv_buff_para.RN << ")" << std::endl;
-                send_buff.RN -= 1;
+                // std::cerr << "[ERROR] 接收无效(" << udp_recv_cache_para.SN << ", " << udp_recv_cache_para.RN << ")" << std::endl;
+                response_buff.RN -= 1;
                 continue;
             }
             
-            length_runtime -= recv_buff_para.size;
-            recv_buff_para.data += recv_buff_para.size;
-            std::cout << "[SUCCESS] 累计接收数据：" << length - length_runtime << " Byte\n";
+            len_remain -= udp_recv_cache_para.size;
+            udp_recv_cache_para.data += udp_recv_cache_para.size;
+            // std::cout << "[SUCCESS] 累计接收数据：" << len - len_remain << " Byte\n";
             retry = 0;
         }
 
-        if(buffer[1] != 0x50) {    // 不知道为什么前两位不对，打个补丁
+        if(buffer[1] != 0x50 && buffer[2] == 0x4E && buffer[3] == 0x47) {    // 不知道为什么前两位不对，打个补丁
             buffer[0] = 0x89;
             buffer[1] = 0x50;
         }
-        writeHexToFile(buffer, length, "log");
+        writeHexToFile(buffer, len, "log");
 
     } else {
-        std::cerr << "[ERROR] 无连接不能接收帧" << std::endl;
+        // std::cerr << "[ERROR] 无连接不能接收帧" << std::endl;
         return false;
     }
 
     // 确保接收到的数据长度与预期相符
-    if(length_runtime != 0 || (recv_buffer - buffer != length)) {
-        std::cerr << "[ERROR] 接收到的数据长度不正确。" << std::endl;
+    if(len_remain != 0 || (p_toBuffer - buffer != len)) {
+        // std::cerr << "[ERROR] 接收到的数据长度不正确。" << std::endl;
         // 处理错误，例如关闭连接或重试
         return false;
     } else {
-        std::vector<uchar> encode_data(buffer, buffer + length);
+        std::vector<uchar> encode_data(buffer, buffer + len);
         
         // 保存图片数据到文件
         cv::Mat frame = cv::imdecode(encode_data, cv::IMREAD_UNCHANGED);
         if(frame.empty())    std::cerr << "[ERROR] 图像解码失败" << std::endl;
-        else    cv::imwrite("接收图片.png", frame);
+        else {
+            cv::imwrite("接收图片.png", frame);
+            cv::imshow(NAME_SHOW_WINDOW, frame);
+        }
     }
 
     return true;
 }
 
-ssize_t socket_send_client(void* data, size_t length) {
+ssize_t socket_send_client(void* data, size_t len) {
     if(flag_tcp) {
-        return socket_send_tcp_client(data, length);
+        return socket_send_tcp_client(data, len);
     } else if(flag_udp) {
-        return socket_send_udp_client(data, length);
+        return socket_send_udp_client(data, len);
     } else {
-        std::cerr << "[ERROR] 无连接不能发送" << std::endl;
+        // std::cerr << "[ERROR] 无连接不能发送" << std::endl;
         return -1;
     }
     
 }
 
-ssize_t socket_send_tcp_client(void* data, size_t length) {
-    return send(client_fd, data, length, 0);
+ssize_t socket_send_tcp_client(void* data, size_t len) {
+    return send(client_fd, data, len, 0);
 }
 
-ssize_t socket_send_udp_client(void* data, size_t length) {
-    auto ret = sendto(client_fd, data, length, 0,
+ssize_t socket_send_udp_client(void* data, size_t len) {
+    auto ret = sendto(client_fd, data, len, 0,
         (sockaddr*)&remote_server_addr, remote_server_addr_len);
     if(-1 != ret) {
-        std::cout << "[INFO] 发送消息到" << inet_ntoa(remote_server_addr.sin_addr);
-        std::cout << "(" << ntohs(remote_server_addr.sin_port) << ")的消息: ";
-        std::cout << ret << " Byte" << std::endl;
+        // std::cout << "[INFO] 发送消息到" << inet_ntoa(remote_server_addr.sin_addr);
+        // std::cout << "(" << ntohs(remote_server_addr.sin_port) << ")的消息: ";
+        // std::cout << ret << " Byte" << std::endl;
     }
     return ret;
 }
 
 
-ssize_t socket_recv_client(void* buffer, size_t length) {
+ssize_t socket_recv_client(void* buffer, size_t len) {
     if(flag_tcp) {
-        return socket_recv_tcp_client(buffer, length);
+        return socket_recv_tcp_client(buffer, len);
     } else if(flag_udp) {
-        return socket_recv_udp_client(buffer, length);
+        return socket_recv_udp_client(buffer, len);
     } else {
-        std::cerr << "[ERROR] 无连接不能接收" << std::endl;
+        // std::cerr << "[ERROR] 无连接不能接收" << std::endl;
         return -1;
     }
 }
 
-ssize_t socket_recv_tcp_client(void* buffer, size_t length) {
-    return recv(client_fd, buffer, length, 0);
+ssize_t socket_recv_tcp_client(void* buffer, size_t len) {
+    return recv(client_fd, buffer, len, 0);
 }
 
-ssize_t socket_recv_udp_client(void*& buffer, size_t length) {
-    return recvfrom(client_fd, buffer, length, 0,
+ssize_t socket_recv_udp_client(void*& buffer, size_t len) {
+    return recvfrom(client_fd, buffer, len, 0,
         (sockaddr*)&remote_server_addr, &remote_server_addr_len);
 }
 
