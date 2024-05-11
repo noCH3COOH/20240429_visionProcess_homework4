@@ -15,7 +15,7 @@ int tcp_pullFlow() {
 }
 
 int main() {
-    tcp_pullFlow();
+    // tcp_pullFlow();
     udp_pullFlow();
 
     return 0;
