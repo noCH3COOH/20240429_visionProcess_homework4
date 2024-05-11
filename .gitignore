@@ -10,3 +10,6 @@ client/Hex_log copy.txt
 Hex_log.txt
 
 .vscode/
+
+server/mediamtx
+server/mediamtx*

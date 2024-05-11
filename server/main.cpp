@@ -17,9 +17,16 @@
 #include <netinet/in.h>
 #include <opencv2/opencv.hpp>
 
+extern "C" {
+#include <libavutil/imgutils.h>
+#include <libavcodec/avcodec.h>
+#include <libswscale/swscale.h>
+#include <libavformat/avformat.h>
+}
+
 // ==================== define ====================
 
-#define PATH_VIDEO "test.mp4"
+#define PATH_VIDEO "./test_640x480.mp4"
 
 #define IP_SERVER "127.0.0.1"
 
@@ -63,8 +70,6 @@ int* ack_buffer_para_SN;
 int* ack_buffer_para_RN;
 size_t* ack_buffer_para_size;
 byte_t* ack_buffer_para_data;
-
-cv::Mat frame;
 
 sockaddr_in server_addr;
 socklen_t server_addr_len;
@@ -127,43 +132,100 @@ int main() {
         return 1;
     }
 
-    cv::VideoCapture video_2send(PATH_VIDEO);
-    if(!video_2send.isOpened())
-    {
-        std::cerr << "[ERROR] 摄像头异常" << std::endl;
-        return -1;
+    // cv::VideoCapture video2send(PATH_VIDEO);
+    // if(!video2send.isOpened())
+    // {
+    //     std::cerr << "[ERROR] 视频读入异常" << std::endl;
+    //     return -1;
+    // }
+
+    av_register_all();
+    AVFormatContext* formatContext = avformat_alloc_context();
+    if (!formatContext) {
+        // 错误处理
     }
 
-    cv::Mat empty_frame;
+    // 打开视频文件
+    if (avformat_open_input(&formatContext, "video.mp4", NULL, NULL) < 0) {
+        // 错误处理
+    }
 
-    do {
-        video_2send.read(frame);
+    // 查找视频流
+    AVCodecParameters* codecParameters = NULL;
+    AVCodec* codec = NULL;
+    int videoStreamIndex = -1;
+    for (int i = 0; i < formatContext->nb_streams; i++) {
+        codecParameters = formatContext->streams[i]->codecpar;
+        if (codecParameters->codec_type == AVMEDIA_TYPE_VIDEO) {
+            codec = avcodec_find_decoder(codecParameters->codec_id);
+            if (codec) {
+                videoStreamIndex = i;
+                break;
+            }
+        }
+    }
 
-        socket_sendFrame_server(frame);
-        if(!socket_wait4ACK_server()) {
-            std::cerr << "[ERROR] 数据包传输失败" << std::endl;
-            break;
-        } else {
-            std::cout << "[SUCCESS] 数据包到达" << std::endl;
+    if (videoStreamIndex == -1) {
+        // 错误处理
+        std::cerr << "[ERROR] 无视频流" << std::endl;
+    }
+
+    // 创建解码器上下文
+    AVCodecContext* codecContext = avcodec_alloc_context3(codec);
+    avcodec_parameters_to_context(codecContext, codecParameters);
+
+    // 打开解码器
+    if (avcodec_open2(codecContext, codec, NULL) < 0) {
+        // 错误处理
+        std::cerr << "[ERROR] 解码器错误" << std::endl;
+    }
+
+    AVFrame* frame = av_frame_alloc();
+    AVPacket* packet = av_packet_alloc();
+
+    while(av_read_frame(formatContext, packet) >= 0) {
+        if (packet->stream_index == videoStreamIndex) {
+            // 解码视频帧
+            if (avcodec_send_packet(codecContext, packet) < 0) {
+                // 错误处理
+                std::cerr << "[ERROR] 解码错误" << std::endl;
+            }
+            while (avcodec_receive_frame(codecContext, frame) == 0) {
+                // 将AVFrame转换为cv::Mat
+                cv::Mat mat(cv::Size(frame->width, frame->height), CV_8UC3, frame->data, 0UL);
+                // 处理mat
+                socket_sendFrame_server(mat);
+                if(!socket_wait4ACK_server()) {
+                    std::cerr << "[ERROR] 数据包传输失败" << std::endl;
+                    break;
+                } else {
+                    std::cout << "[SUCCESS] 数据包到达" << std::endl;
+                }
+                
+                socket_sendKeep_server();
+                if(!socket_wait4ACK_server()) {
+                    std::cerr << "[ERROR] 传输失败" << std::endl;
+                    break;
+                } else {
+                    std::cout << "[SUCCESS] 保持请求到达" << std::endl;
+                }
+            }
         }
-        
-        socket_sendKeep_server();
-        if(!socket_wait4ACK_server()) {
-            std::cerr << "[ERROR] 传输失败" << std::endl;
-            break;
-        } else {
-            std::cout << "[SUCCESS] 保持请求到达" << std::endl;
-        }
+        av_packet_unref(packet);        
 
         key = cv::waitKey();
-
-        empty_frame.copyTo(frame);
-    } while(key != 'q' && key != 'Q');
+    }
 
     // 关闭socket
     free(uni_buff);
     free(buffer);
     socket_disconnect_server();
+
+    // 释放资源
+    av_frame_free(&frame);
+    av_packet_free(&packet);
+    avcodec_free_context(&codecContext);
+    avformat_close_input(&formatContext);
 
     return 0;
 }

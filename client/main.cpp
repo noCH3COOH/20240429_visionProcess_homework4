@@ -61,6 +61,8 @@ byte_t* ack_buffer_para_data;
 
 byte_t* sendBuff;
 
+cv::Mat frame;
+
 stopAndWait_ARQ_t package_keep( (int)-1, (int)0, (size_t)-1, frame_flag );
 stopAndWait_ARQ_t package_stop( (int)0, (int)-1, (size_t)-1, frame_flag );
 stopAndWait_ARQ_t package_ack( (int)-1, (int)-1, (size_t)-1, frame_flag );
@@ -124,6 +126,7 @@ int main() {
     cv::waitKey(0);
 
     free(ack_buffer);
+    frame.release();
 
     return 0;
 }
@@ -300,7 +303,7 @@ bool socket_recvFrame_client() {
         std::vector<uchar> encode_data(buffer, buffer + len);
         
         // 保存图片数据到文件
-        cv::Mat frame = cv::imdecode(encode_data, cv::IMREAD_UNCHANGED);
+        frame = cv::imdecode(encode_data, cv::IMREAD_UNCHANGED);
         if(frame.empty())    std::cerr << "[ERROR] 图像解码失败" << std::endl;
         else {
             cv::imwrite("接收图片.png", frame);
