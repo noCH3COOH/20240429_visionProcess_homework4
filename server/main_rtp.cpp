@@ -12,7 +12,7 @@ int udp_pushFlow(std::string video) {
     cmd += "-vcodec libx264 ";
     cmd += "-an ";
     cmd += "-f rtp ";
-    cmd += "rtp://" + std::string(IP) + ":" + std::to_string(PORT_UDP) + ">../client/stream.sdp";
+    cmd += "rtp://" + std::string(IP) + ":" + std::to_string(PORT_UDP) + ">../clinet/stream.sdp";
 
     std::cout << "[INFO] " + cmd << std::endl;
     return system(cmd.c_str());
